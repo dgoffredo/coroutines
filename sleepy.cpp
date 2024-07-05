@@ -14,9 +14,14 @@ using TimePoint = std::chrono::time_point<std::chrono::steady_clock>;
 
 struct EventLoop {
   std::multimap<TimePoint, void *> events;
+  void schedule(TimePoint deadline, void *data);
 
   void run();
 };
+
+void EventLoop::schedule(TimePoint deadline, void *data) {
+  events.emplace(deadline, data);
+}
 
 void EventLoop::run() {
   std::cout << "Starting event loop.\n";
@@ -108,7 +113,7 @@ struct Coroutine::Promise {
 
   auto await_transform(Sleep sleep_cmd) {
     void *data = CoroutineHandle::from_promise(*this).address();
-    _loop->events.emplace(sleep_cmd.deadline, data);
+    _loop->schedule(sleep_cmd.deadline, data);
     return std::suspend_always{};
   }
 

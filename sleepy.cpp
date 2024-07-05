@@ -1,9 +1,9 @@
 // This code is based on
 // <https://gist.github.com/Qix-/09532acd0f6c9a57c09bd9ce31b3023f>.
 
-#include <iostream>
 #include <chrono>
 #include <coroutine>
+#include <iostream>
 #include <map>
 #include <thread>
 #include <typeinfo>
@@ -13,8 +13,8 @@ const int DELAY_MS = 250;
 using TimePoint = std::chrono::time_point<std::chrono::steady_clock>;
 
 struct EventLoop {
-  std::multimap<TimePoint, void*> events;
-  
+  std::multimap<TimePoint, void *> events;
+
   void run();
 };
 
@@ -37,7 +37,8 @@ void EventLoop::run() {
 struct Sleep {
   TimePoint deadline;
   explicit Sleep(int ms)
-  : deadline(std::chrono::steady_clock::now() + std::chrono::milliseconds(ms)) {}
+      : deadline(std::chrono::steady_clock::now() +
+                 std::chrono::milliseconds(ms)) {}
 };
 
 Sleep sleep(int ms) { return Sleep{ms}; }
@@ -98,13 +99,10 @@ struct Coroutine::Promise {
 
   auto get_return_object() { return CoroutineHandle::from_promise(*this); }
   std::suspend_never initial_suspend() { return {}; }
-  auto final_suspend() noexcept {
-    return FinalAwaitable{ _continuation };
-  }
+  auto final_suspend() noexcept { return FinalAwaitable{_continuation}; }
   void return_void() {}
 
-  template <typename T>
-  auto && await_transform(T &&obj) const noexcept {
+  template <typename T> auto &&await_transform(T &&obj) const noexcept {
     return std::forward<T>(obj);
   }
 
@@ -114,9 +112,7 @@ struct Coroutine::Promise {
     return std::suspend_always{};
   }
 
-  void unhandled_exception() {
-    std::terminate();
-  }
+  void unhandled_exception() { std::terminate(); }
 };
 
 struct Coroutine::Awaiter {
@@ -124,10 +120,8 @@ struct Coroutine::Awaiter {
 
   CoroutineHandle _co;
 
-  explicit Awaiter(CoroutineHandle co) : _co(co) {};
-  bool await_ready() {
-    return false;
-  }
+  explicit Awaiter(CoroutineHandle co) : _co(co){};
+  bool await_ready() { return false; }
 
   auto await_suspend(std::coroutine_handle<> co_cont) {
     _co.promise()._continuation = co_cont;
@@ -180,7 +174,7 @@ int main() {
   // TODO: I guess something needs to "drive" `sleepy_main`.
   auto main_coro = sleepy_main(&loop);
   std::cout << typeid(main_coro).name() << '\n';
-  
+
   loop.run();
   main_coro._co.destroy(); // TODO?
 

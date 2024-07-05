@@ -2,23 +2,47 @@
 // <https://gist.github.com/Qix-/09532acd0f6c9a57c09bd9ce31b3023f>.
 
 #include <iostream>
+#include <chrono>
 #include <coroutine>
+#include <map>
+#include <thread>
+#include <typeinfo>
 
-const int DELAY_MS = 1000;
+const int DELAY_MS = 250;
+
+using TimePoint = std::chrono::time_point<std::chrono::steady_clock>;
 
 struct EventLoop {
-  // TODO
+  std::multimap<TimePoint, void*> events;
+  
+  void run();
 };
+
+void EventLoop::run() {
+  std::cout << "Starting event loop.\n";
+
+  while (!events.empty()) {
+    auto current = events.begin();
+    auto [deadline, data] = *current;
+    // TODO: check if `deadline` is in the past. For now this will do.
+    std::this_thread::sleep_until(deadline);
+    auto co = std::coroutine_handle<>::from_address(data);
+		events.erase(current);
+		co.resume();
+  }
+
+  std::cout << "Stopping event loop.\n";
+}
 
 struct Sleep {
-	int _delay;
-	explicit Sleep(int delay) : _delay(delay) {}
+  TimePoint deadline;
+	explicit Sleep(int ms)
+  : deadline(std::chrono::steady_clock::now() + std::chrono::milliseconds(ms)) {}
 };
 
-Sleep sleep(int delay) { return Sleep{delay}; }
+Sleep sleep(int ms) { return Sleep{ms}; }
 
-class Coroutine {
-public:
+struct Coroutine {
 	struct Awaiter;
 	struct Promise;
 	using CoroutineHandle = std::coroutine_handle<Promise>;
@@ -35,21 +59,15 @@ public:
 	Awaiter operator co_await();
 };
 
-/* TODO void on_sleep_done(uv_timer_t *timer) {
-	auto co = std::coroutine_handle<>::from_address(timer->data);
-	delete timer;
-	co.resume();
-}*/
-
 // TODO: This part I understand the least.
 struct FinalAwaitable {
-	// std::coroutine_handle<> _co;
-	std::coroutine_handle<> _co = std::noop_coroutine();
+	std::coroutine_handle<> _co;
+	// std::coroutine_handle<> _co = std::noop_coroutine();
 
 	explicit FinalAwaitable(std::coroutine_handle<> co) : _co(co) {}
 
 	bool await_ready() noexcept { return false; }
-  /*
+
 	std::coroutine_handle<> await_suspend(std::coroutine_handle<>) noexcept {
 		if (_co) {
 			return _co;
@@ -57,12 +75,17 @@ struct FinalAwaitable {
 			return std::noop_coroutine();
 		}
 	}
-  */
-	std::coroutine_handle<> await_suspend(std::coroutine_handle<>) noexcept {
-    return _co;
-  }
 
-	void await_resume() noexcept {}
+	/*std::coroutine_handle<> await_suspend(std::coroutine_handle<>) noexcept {
+    return _co;
+  }*/
+
+	void await_resume() noexcept {
+		// TODO?
+		if (_co) {
+			_co.destroy();
+		}
+	}
 };
 
 struct Coroutine::Promise {
@@ -86,11 +109,8 @@ struct Coroutine::Promise {
 	}
 
 	auto await_transform(Sleep sleep_cmd) {
-		/* TODO
-    uv_timer_t *timer = new uv_timer_t{};
-		timer->data = CoroutineHandle::from_promise(*this).address();
-    */
-    (void)sleep_cmd;
+		void *data = CoroutineHandle::from_promise(*this).address();
+    _loop->events.emplace(sleep_cmd.deadline, data);
 		return std::suspend_always{};
 	}
 
@@ -114,7 +134,10 @@ struct Coroutine::Awaiter {
 		return true;
 	}
 
-	void await_resume() {}
+	void await_resume() {
+		// TODO?
+		_co.destroy();
+	}
 };
 
 Coroutine::Awaiter Coroutine::operator co_await() {
@@ -154,8 +177,13 @@ Coroutine sleepy_main(EventLoop *loop) {
 int main() {
 	EventLoop loop;
 
-	sleepy_main(&loop);
-  // TODO
+	// TODO: I guess something needs to "drive" `sleepy_main`.
+	auto main_coro = sleepy_main(&loop);
+	std::cout << typeid(main_coro).name() << '\n';
+  
+	loop.run();
+	main_coro._co.destroy(); // TODO?
 
+	std::cout << "====== done ======\n";
 	return 0;
 }

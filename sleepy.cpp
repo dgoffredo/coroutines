@@ -4,9 +4,12 @@
 
 #include <chrono>
 #include <coroutine>
+#include <cstddef>
 #include <iostream>
 #include <memory>
+#include <new>
 #include <queue>
+#include <string>
 #include <thread>
 #include <utility>
 
@@ -55,6 +58,10 @@ struct Sleep {
 
 Sleep sleep(int ms) { return Sleep{ms}; }
 
+// Rather than having a special case for `void`, just use `Void`.
+struct Void {};
+
+template <typename Ret = Void>
 struct Coroutine {
   struct Awaiter;
   struct Promise;
@@ -91,7 +98,8 @@ struct FinalAwaitable {
   void await_resume() noexcept {}
 };
 
-struct Coroutine::Promise {
+template <typename Ret>
+struct Coroutine<Ret>::Promise {
   using CoroutineHandle = std::coroutine_handle<Promise>;
 
   EventLoop *_loop;
@@ -104,12 +112,19 @@ struct Coroutine::Promise {
   // which will cause it to be `.resume()`d.
   std::coroutine_handle<> _continuation = std::noop_coroutine();
 
+  alignas(Ret) std::byte _value[sizeof(Ret)];
+
   explicit Promise(EventLoop *loop) : _loop(loop) {}
+  ~Promise() {
+    std::launder(reinterpret_cast<Ret*>(&_value[0]))->~Ret();
+  }
 
   Coroutine get_return_object() { return Coroutine{UniqueHandle(this)}; }
   std::suspend_never initial_suspend() { return {}; }
   auto final_suspend() noexcept { return FinalAwaitable{_continuation}; }
-  void return_void() {}
+  void return_value(Ret value) {
+    new (_value) Ret(std::move(value));
+  }
 
   // If we `co_await` a `Sleep`, schedule ourselves as a continuation for when
   // the sleep is done.
@@ -128,7 +143,8 @@ struct Coroutine::Promise {
   void unhandled_exception() { std::abort(); }
 };
 
-struct Coroutine::Awaiter {
+template <typename Ret>
+struct Coroutine<Ret>::Awaiter {
   Promise *_promise;
 
   explicit Awaiter(Promise *promise) : _promise(promise){};
@@ -139,27 +155,40 @@ struct Coroutine::Awaiter {
     return true;
   }
 
-  void await_resume() {}
+  Ret await_resume() {
+    return std::move(*std::launder(reinterpret_cast<Ret*>(&_promise->_value[0])));
+  }
 };
 
-Coroutine::Awaiter Coroutine::operator co_await() {
+template <typename Ret>
+typename Coroutine<Ret>::Awaiter Coroutine<Ret>::operator co_await() {
   return Coroutine::Awaiter(_promise.get());
 }
 
-Coroutine sleepy_main(EventLoop *loop);
-Coroutine second(EventLoop *loop);
-Coroutine third(EventLoop *loop);
+Coroutine<> sleepy_main(EventLoop *loop);
+Coroutine<> second(EventLoop *loop);
+Coroutine<> third(EventLoop *loop);
+Coroutine<std::string> fourth(EventLoop *loop);
 
-Coroutine third(EventLoop *) {
+Coroutine<std::string> fourth(EventLoop *loop) {
+  std::cout << "        waahhh!\n";
+  co_await sleep(DELAY_MS);
+  std::cout << "        ooooo!\n";
+  co_return "fish sticks";
+}
+
+Coroutine<> third(EventLoop *loop) {
   std::cout << "    4" << '\n';
   co_await sleep(DELAY_MS);
   std::cout << "    5" << '\n';
   co_await sleep(DELAY_MS);
   std::cout << "    6" << '\n';
   co_await sleep(DELAY_MS);
+  std::cout << "fourth returned: " << co_await fourth(loop) << '\n';
+  co_return Void{}; // TODO
 }
 
-Coroutine second(EventLoop *loop) {
+Coroutine<> second(EventLoop *loop) {
   std::cout << "  2" << '\n';
   co_await sleep(DELAY_MS);
   std::cout << "  3" << '\n';
@@ -169,13 +198,14 @@ Coroutine second(EventLoop *loop) {
   }
   std::cout << "  7" << '\n';
   co_await sleep(DELAY_MS);
+  co_return Void{}; // TODO
 }
 
-Coroutine sleepy_main(EventLoop *loop) {
+Coroutine<> sleepy_main(EventLoop *loop) {
   static int i = 0;
   if (++i == 2) {
     std::cout << "Goodbye!\n";
-    co_return;
+    co_return Void{}; // TODO
   }
   std::cout << "1" << '\n';
   co_await sleep(DELAY_MS);
@@ -185,6 +215,7 @@ Coroutine sleepy_main(EventLoop *loop) {
   std::cout << "9" << '\n';
   co_await sleepy_main(loop);
   std::cout << "I finished awaiting myself.\n";
+  co_return Void{}; // TODO
 }
 
 int main() {

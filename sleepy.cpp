@@ -82,20 +82,30 @@ struct Coroutine {
 
   // See definition below. It has to be after the definition of `Awaiter`.
   Awaiter operator co_await();
+
+  void detach() {
+    _promise.release()->detach();
+  }
 };
 
 struct FinalAwaitable {
-  std::coroutine_handle<> _co;
+  std::coroutine_handle<> _continuation;
+  bool _detached;
 
-  explicit FinalAwaitable(std::coroutine_handle<> co) : _co(co) {}
-
-  bool await_ready() noexcept { return false; }
+  bool await_ready() noexcept { return _detached; }
 
   std::coroutine_handle<> await_suspend(std::coroutine_handle<>) noexcept {
-    return _co;
+    std::cout << "in FinalAwaitable::await_suspend(coroutine_handle<>)\n";
+    return _continuation;
   }
 
-  void await_resume() noexcept {}
+  void await_resume() noexcept {
+    std::cout << "in FinalAwaitable::await_resume()\n";
+  }
+
+  ~FinalAwaitable() {
+    std::cout << "in FinalAwaitable::~FinalAwaitable()\n";
+  }
 };
 
 template <typename Ret>
@@ -111,6 +121,7 @@ struct Coroutine<Ret>::Promise {
   // `FinalAwaitable` will then return it in `FinalAwaitable::await_suspend`,
   // which will cause it to be `.resume()`d.
   std::coroutine_handle<> _continuation = std::noop_coroutine();
+  bool _detached = false;
 
   alignas(Ret) std::byte _value[sizeof(Ret)];
 
@@ -119,9 +130,13 @@ struct Coroutine<Ret>::Promise {
     std::launder(reinterpret_cast<Ret*>(&_value[0]))->~Ret();
   }
 
+  void detach() { _detached = true; }
+
   Coroutine get_return_object() { return Coroutine{UniqueHandle(this)}; }
   std::suspend_never initial_suspend() { return {}; }
-  auto final_suspend() noexcept { return FinalAwaitable{_continuation}; }
+  auto final_suspend() noexcept { 
+    return FinalAwaitable{_continuation, _detached};
+  }
   void return_value(Ret value) {
     new (_value) Ret(std::move(value));
   }
@@ -169,6 +184,13 @@ Coroutine<> sleepy_main(EventLoop *loop);
 Coroutine<> second(EventLoop *loop);
 Coroutine<> third(EventLoop *loop);
 Coroutine<std::string> fourth(EventLoop *loop);
+Coroutine<> fifth(EventLoop *loop);
+
+Coroutine<> fifth(EventLoop *loop) {
+  std::cout << "I'm the detached one.\n";
+  co_await sleep(DELAY_MS);
+  co_return Void{}; // TODO
+}
 
 Coroutine<std::string> fourth(EventLoop *loop) {
   std::cout << "        waahhh!\n";
@@ -201,12 +223,20 @@ Coroutine<> second(EventLoop *loop) {
   co_return Void{}; // TODO
 }
 
+template <typename Ret>
+void operator+(Coroutine<Ret>&& coroutine) {
+  coroutine.detach();
+}
+
+#define go +
+
 Coroutine<> sleepy_main(EventLoop *loop) {
   static int i = 0;
   if (++i == 2) {
     std::cout << "Goodbye!\n";
     co_return Void{}; // TODO
   }
+  go fifth(loop);
   std::cout << "1" << '\n';
   co_await sleep(DELAY_MS);
   co_await second(loop);

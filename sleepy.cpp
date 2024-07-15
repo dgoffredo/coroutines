@@ -58,6 +58,26 @@ struct Sleep {
 
 Sleep sleep(int ms) { return Sleep{ms}; }
 
+template <typename Value>
+struct ValueAwaiter {
+  EventLoop *loop;
+  std::chrono::milliseconds delay;
+  Value value;
+
+  bool await_ready() { return false; }
+  void await_suspend(std::coroutine_handle<> continuation) {
+    loop->schedule(std::chrono::steady_clock::now() + delay, continuation.address());
+  }
+  Value await_resume() {
+    return std::move(value);
+  }
+};
+
+template <typename Value>
+ValueAwaiter<Value> return_after(EventLoop *loop, std::chrono::milliseconds delay, Value&& value) {
+  return ValueAwaiter<Value>{loop, delay, std::forward<Value>(value)};
+}
+
 // Rather than having a special case for `void`, just use `Void`.
 struct Void {};
 
@@ -90,21 +110,21 @@ struct Coroutine {
 
 struct FinalAwaitable {
   std::coroutine_handle<> _continuation;
-  bool _detached;
+  bool _detached = false;
 
   bool await_ready() noexcept { return _detached; }
 
   std::coroutine_handle<> await_suspend(std::coroutine_handle<>) noexcept {
-    std::cout << "in FinalAwaitable::await_suspend(coroutine_handle<>)\n";
+    // std::cout << "in FinalAwaitable::await_suspend(coroutine_handle<>)\n";
     return _continuation;
   }
 
   void await_resume() noexcept {
-    std::cout << "in FinalAwaitable::await_resume()\n";
+    // std::cout << "in FinalAwaitable::await_resume()\n";
   }
 
   ~FinalAwaitable() {
-    std::cout << "in FinalAwaitable::~FinalAwaitable()\n";
+    // std::cout << "in FinalAwaitable::~FinalAwaitable()\n";
   }
 };
 
@@ -162,8 +182,15 @@ template <typename Ret>
 struct Coroutine<Ret>::Awaiter {
   Promise *_promise;
 
-  explicit Awaiter(Promise *promise) : _promise(promise){};
-  bool await_ready() { return false; }
+  explicit Awaiter(Promise *promise)
+  : _promise(promise){
+    std::cout << "Coroutine Awaiter created with promise at address " << static_cast<const void*>(promise) << '\n';
+  }
+
+  bool await_ready() {
+    // TODO: This is subtle.
+    return std::coroutine_handle<Promise>::from_promise(*_promise).done();
+  }
 
   auto await_suspend(std::coroutine_handle<> continuation) {
     _promise->_continuation = continuation;
@@ -194,7 +221,7 @@ Coroutine<> fifth(EventLoop *loop) {
 
 Coroutine<std::string> fourth(EventLoop *loop) {
   std::cout << "        waahhh!\n";
-  co_await sleep(DELAY_MS);
+  // co_await sleep(DELAY_MS);
   std::cout << "        ooooo!\n";
   co_return "fish sticks";
 }
@@ -207,6 +234,7 @@ Coroutine<> third(EventLoop *loop) {
   std::cout << "    6" << '\n';
   co_await sleep(DELAY_MS);
   std::cout << "fourth returned: " << co_await fourth(loop) << '\n';
+  std::cout << "Here I am at the end of third.\n";
   co_return Void{}; // TODO
 }
 
@@ -232,10 +260,13 @@ void operator+(Coroutine<Ret>&& coroutine) {
 
 Coroutine<> sleepy_main(EventLoop *loop) {
   static int i = 0;
-  if (++i == 2) {
+  ++i;
+  std::cout << "i is " << i << '\n';
+  if (i == 2) {
     std::cout << "Goodbye!\n";
     co_return Void{}; // TODO
   }
+  std::cout << "We decided not to return.\n";
   go fifth(loop);
   std::cout << "1" << '\n';
   co_await sleep(DELAY_MS);
@@ -243,8 +274,14 @@ Coroutine<> sleepy_main(EventLoop *loop) {
   std::cout << "8" << '\n';
   co_await sleep(DELAY_MS);
   std::cout << "9" << '\n';
+  std::cout << "The value awaiter gave us: " << co_await return_after(loop, std::chrono::milliseconds(2), 45.6) << '\n';
+  std::cout << "I'm about to await myself.\n";
   co_await sleepy_main(loop);
   std::cout << "I finished awaiting myself.\n";
+
+  std::cout << "Once again the value awaiter gave us: " << co_await return_after(loop, std::chrono::milliseconds(2), 45.6) << '\n';
+  std::cout << "10" << '\n';
+
   co_return Void{}; // TODO
 }
 
